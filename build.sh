@@ -1,5 +1,11 @@
 #!/bin/sh
 
+topdir=$(dirname $0)
+cd $topdir
+
 cd app
-mkdir ../build
-g++ -std=c++11 -o ../build/main main.cpp
+mkdir -p ../build
+
+CFLAGS="-g -Wall -O2"
+# g++ -std=c++14 $CFLAGS -o ../build/main main.cpp
+g++ -std=c++14 $CFLAGS -o ../build/parser parser.cpp
