@@ -191,7 +191,7 @@ NodePtr parse(const vector<string>& tokens, int& i) {
     * t
 */
 
-ObjectPtr eval(NodePtr node) {
+ObjectPtr eval(NodePtr node, map<string, NodePtr>& table) {
   auto make = [](auto val) { return make_shared<Object>(val); };
   auto make_f1 = [](auto val, const string name = "") { return make_shared<Func1>(val, name); };
   auto make_f2 = [](auto val, const string name = "") { return make_shared<Func2>(val, name); };
@@ -201,8 +201,8 @@ ObjectPtr eval(NodePtr node) {
     return make(stol(node->name_));
   }
   else if (node->kind_ == Kind::App) {
-    auto fun = eval(node->fun_);
-    auto arg = eval(node->arg_);
+    auto fun = eval(node->fun_, table);
+    auto arg = eval(node->arg_, table);
 
     return fun->call(arg);
   }
@@ -274,6 +274,9 @@ ObjectPtr eval(NodePtr node) {
     else if (node->name_ == "t") {
       return True();
     }
+    else if (node->name_ == "f") {
+      return False();
+    }
     // #24
     else if (node->name_ == "i") {
       return make_f1([=](ObjectPtr arg1){
@@ -313,6 +316,10 @@ ObjectPtr eval(NodePtr node) {
         return arg1->is_nil() ? True() : False();
       });
     }
+    else if (table.count(node->name_)) {
+      auto child = table[node->name_];
+      return eval(child, table);
+    }
     else {
       cerr << "unknown function: " << node->name_ << endl;
     }
@@ -332,18 +339,98 @@ void tokenize(const string& line, vector<string>& tokens) {
   }
 }
 
-int main() {
-  while(1){
-    string stmt;
-    getline(cin, stmt);
+void create_depends(map<string, set<string>>& G, map<string, NodePtr>& table) {
+  function<void(set<string>& s, NodePtr node)> search = [&](set<string>& s, NodePtr node) {
+    if (node->kind_ == Kind::Fun) {
+      s.insert(node->name_);
+    }
+    else if (node->kind_ == Kind::App) {
+      search(s, node->fun_);
+      search(s, node->arg_);
+    }
+  };
 
-    vector<string> tokens;
-    tokenize(stmt, tokens);
+  for(auto &entry : table){
+    search(G[entry.first], entry.second);
+  }
+}
 
-    int i = 0;
-    auto node = parse(tokens, i);
-    // node->dump();
-    eval(node)->dump();
+bool topo_sort(map<string, set<string>>& G, vector<string>& order) {
+  map<string,int> color;
+  function<bool(const string&)> dfs = [&](const string& u) {
+    color[u] = 1;
+    for(auto & e : G[u]) {
+      if (color[e] == 2) continue;
+      if (color[e] == 1) { cerr << u << "->" << e << endl; return false; }
+      dfs(e);
+    }
+    color[u] = 2;
+
+    order.push_back(u);
+    return true;
+  };
+
+  for(auto & u : G) {
+    if (color[u.first] == 0) {
+      if(!dfs(u.first)) return false;
+    }
+  }
+
+  reverse(begin(order), end(order));
+  return true;
+}
+
+int main(int argc, char* argv[]) {
+  if (argc < 2) {
+    cerr << "usage: " << argv[0] << " galaxy.txt" << endl;
+    return 1;
+  }
+
+  map<string, NodePtr> table;
+  map<string, ObjectPtr> objects;
+  {
+    ifstream ifs(argv[1]);
+    if (ifs.fail()) {
+      cerr << "failed to open " << argv[1] << endl;
+      return 1;
+    }
+
+    string line;
+    while(getline(ifs, line)) {
+      stringstream ss(line);
+      string var, eq;
+      ss >> var;
+      ss >> eq;
+
+      if (eq != "=") {
+        cerr << "not assignment" << endl;
+        continue;
+      }
+
+      vector<string> tokens;
+      tokenize(ss.str(), tokens);
+
+      int i = 0;
+      auto node = parse(tokens, i);
+      table[var] = node;
+    }
+
+#if 1
+    map<string, set<string>> G;
+    create_depends(G, table);
+    vector<string> order;
+    if (!topo_sort(G, order)) cerr << "recursive" << endl;
+
+    for(auto& var : order) {
+      objects[var] = eval(table[var], table);
+    }
+#elif 0
+    for(auto& var : table) {
+      objects[var.first] = eval(var.second, table);
+    }
+#else
+   objects["galaxy"] = eval(table["galaxy"], table);
+#endif
   }
 
   return 0;
