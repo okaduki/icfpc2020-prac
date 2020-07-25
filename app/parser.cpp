@@ -19,13 +19,15 @@ using ObjectPtr = shared_ptr<Object>;
 struct Object {
 protected:
   long val_;
+  string mod_;
   bool is_val_;
   bool is_nil_;
+  bool is_mod_;
   string name_;
 
 public:
-  Object() : val_(0), is_val_(false), is_nil_(false) {}
-  Object(long val) : val_(val), is_val_ (true) {}
+  Object() : val_(0), is_val_(false), is_nil_(false), is_mod_(false) {}
+  Object(long val) : val_(val), is_val_ (true), is_mod_(false) {}
   // Object(FuncPtr func) : fun_(func), val_(-1), is_val_ (false) {}
 
   long val() const {
@@ -33,6 +35,12 @@ public:
       throw runtime_error("not value");
     }
     return val_;
+  }
+  string mod() const {
+    if (!is_mod_) {
+      throw runtime_error("not mod");
+    }
+    return mod_;
   }
   string name() const { return is_val_ ? "val:" + to_string(val_) : is_nil_ ? "nil" : name_; }
 
@@ -46,7 +54,63 @@ public:
   void dump() const {
     if (is_val_) cerr << "val: " << val_ << endl;
     else if (is_nil_) cerr << "nil" << endl;
+    else if (is_mod_) cerr << "[" << mod_ << "]" << endl;
     else cerr << "func " << name_ << endl;
+  }
+
+  ObjectPtr mod_num() {
+    ObjectPtr res = make_shared<Object>();
+    res->is_mod_ = true;
+
+    string mod = "";
+    long val = val_;
+
+    if (val >= 0) {
+      mod += "01";
+    }
+    else {
+      mod += "10";
+      val = -val;
+    }
+
+    long bit = 0, ub = 1;
+    while(val >= ub) {
+      ub <<= 4;
+      ++bit;
+    }
+
+    mod += string(bit, '1') + "0";
+    ub >>= 1;
+    while(ub) {
+      mod += (val & ub) ? "1" : "0";
+      ub >>= 1;
+    }
+
+    res->mod_ = mod;
+    return res;
+  }
+
+  ObjectPtr dem() {
+    string mod = mod_;
+    
+    long val = 0, sign = 0;
+    if (mod.substr(0,2) == "01") sign = 1;
+    else if (mod.substr(0,2) == "10") sign = -1;
+
+    long bit = 0;
+    for(int i=2; ; ++i){
+      if (mod[i] == '0') break;
+      bit += 1;
+    }
+
+    long p = (1l << (bit * 4 - 1));
+    for(size_t i=2+bit+1; i < mod.size(); ++i) {
+      val += p * (mod[i] == '1' ? 1 : 0);
+      p >>= 1;
+    }
+
+    val = sign * val;
+    return make_shared<Object>(val);
   }
 };
 
@@ -151,13 +215,13 @@ void Node::dump(int indent) const {
 }
 
 
-NodePtr parse(const vector<string>& tokens, int& i) {
+NodePtr parse_(const vector<string>& tokens, int& i) {
   if ((int)tokens.size() == i) return nullptr;
 
   const auto& token = tokens[i];
   ++i;
 
-  if (token.empty()) return parse(tokens, i);
+  if (token.empty()) return parse_(tokens, i);
   if (isdigit(token[0]) || token[0] == '+' || token[0] == '-') {
     auto node = make_shared<Node>();
     node->kind_ = Kind::Number;
@@ -167,8 +231,8 @@ NodePtr parse(const vector<string>& tokens, int& i) {
   else if (token == "ap") {
     auto node = make_shared<Node>();
     node->kind_ = Kind::App;
-    node->fun_ = parse(tokens, i);
-    node->arg_ = parse(tokens, i);
+    node->fun_ = parse_(tokens, i);
+    node->arg_ = parse_(tokens, i);
     return node;
   }
   else {
@@ -180,6 +244,11 @@ NodePtr parse(const vector<string>& tokens, int& i) {
 
   return nullptr;
 }
+NodePtr parse(const vector<string>& tokens) {
+  int i = 0;
+  return parse_(tokens, i);
+}
+
 
 /*
   implement list (in galaxy.txt)
@@ -200,6 +269,14 @@ NodePtr parse(const vector<string>& tokens, int& i) {
     * nil
     * s
     * t
+  to interact ...
+    * if0
+    * mod
+    * dem
+    draw
+    multipledraw
+    send
+    interact 
 */
 
 map<string, NodePtr> gTable;
@@ -216,7 +293,6 @@ ObjectPtr Node::eval() {
     node->arg_ = b;
     return node;
   };
-  cerr << "eval " << name_ << endl;
 
   if (kind_ == Kind::Number) {
     return make(stol(name_));
@@ -261,6 +337,16 @@ ObjectPtr Node::eval() {
     else if (name_ == "lt") {
       return make_f2([=](NodePtr arg1, NodePtr arg2){
         return arg1->eval()->val() < arg2->eval()->val() ? True() : False();
+      });
+    }
+    else if (name_ == "mod") {
+      return make_f1([=](NodePtr arg1){
+        return arg1->eval()->mod_num();
+      });
+    }
+    else if (name_ == "dem") {
+      return make_f1([=](NodePtr arg1){
+        return arg1->eval()->dem();
       });
     }
     // #16
@@ -331,6 +417,12 @@ ObjectPtr Node::eval() {
         return arg1->eval()->is_nil() ? True() : False();
       });
     }
+    // #37
+    else if (name_ == "if0") {
+      return make_f3([=](NodePtr arg1, NodePtr arg2, NodePtr arg3){
+        return arg1->eval()->val() == 0 ? arg2->eval() : arg3->eval();
+      });
+    }
     else if (gTable.count(name_)) {
       auto child = gTable[name_];
       return child->eval();
@@ -344,7 +436,8 @@ ObjectPtr Node::eval() {
 }
 
 
-void tokenize(const string& line, vector<string>& tokens) {
+vector<string> tokenize(const string& line) {
+  vector<string> tokens;
   stringstream ss(line);
   while(ss) {
     string token;
@@ -352,6 +445,7 @@ void tokenize(const string& line, vector<string>& tokens) {
     if(!ss) break;
     tokens.emplace_back(token);
   }
+  return tokens;
 }
 
 void create_depends(map<string, set<string>>& G, map<string, NodePtr>& table) {
@@ -422,17 +516,22 @@ int main(int argc, char* argv[]) {
       string decl;
       getline(ss, decl);
 
-      vector<string> tokens;
-      tokenize(decl, tokens);
-
-      int i = 0;
-      auto node = parse(tokens, i);
+      auto node = parse(tokenize(decl));
       gTable[var] = node;
     }
   }
 
   map<string, ObjectPtr> objects;
   objects["galaxy"] = gTable["galaxy"]->eval();
+
+  while(1) {
+    cout << "> " << flush;
+    string line;
+    getline(cin, line);
+
+    auto node = parse(tokenize(line));
+    node->eval()->dump();
+  }
 
   return 0;
 }
