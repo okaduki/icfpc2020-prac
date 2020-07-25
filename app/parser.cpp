@@ -39,7 +39,7 @@ public:
   bool is_val() const { return is_val_; }
   bool is_nil() const { return is_nil_; }
 
-  virtual ObjectPtr call(ObjectPtr arg) {
+  virtual ObjectPtr call(NodePtr arg) {
     throw runtime_error("object is not callable");
   }
 
@@ -50,76 +50,87 @@ public:
   }
 };
 
+struct Node {
+  Node();
+  // NodePtr apply(NodePtr arg);
+  void dump(int indent = 0) const;
+  ObjectPtr eval();
+
+  Kind kind_;
+  string name_;
+  NodePtr fun_;
+  NodePtr arg_;
+};
+
 struct Nil : public Object {
   Nil() : Object() { is_nil_ = true; }
 };
 
 struct Func1 : public Object {
-  using Type = function<ObjectPtr(ObjectPtr)>;
+  using Type = function<ObjectPtr(NodePtr)>;
   Type f_;
-  Func1 (Type f, const string& name = "") : Object(), f_(f) { name_ = name; }
-  virtual ObjectPtr call(ObjectPtr obj) override {
+  Func1 (Type f) : Object(), f_(f) {}
+  virtual ObjectPtr call(NodePtr obj) override {
     return f_(obj);
   }
 };
 
 struct Func2 : public Object {
-  using Type = function<ObjectPtr(ObjectPtr,ObjectPtr)>;
+  using Type = function<ObjectPtr(NodePtr,NodePtr)>;
   Type f_;
-  Func2 (Type f, const string& name = "") : Object(), f_(f) { name_ = name; }
-  virtual ObjectPtr call(ObjectPtr arg1) override {
+  Func2 (Type f) : Object(), f_(f) { }
+  virtual ObjectPtr call(NodePtr arg1) override {
     auto f = f_;
     return make_shared<Func1>(
-      [f,arg1](ObjectPtr arg2) {
+      [f,arg1](NodePtr arg2) {
         return f(arg1, arg2);
       }
-      , name_ + "(" + arg1->name() + ")"
     );
   }
 };
 
 struct Func3 : public Object {
-  using Type = function<ObjectPtr(ObjectPtr,ObjectPtr,ObjectPtr)>;
+  using Type = function<ObjectPtr(NodePtr,NodePtr,NodePtr)>;
   Type f_;
-  Func3 (Type f, const string& name = "") : Object(), f_(f) { name_ = name; }
-  virtual ObjectPtr call(ObjectPtr arg1) override {
+  Func3 (Type f) : Object(), f_(f) { }
+  virtual ObjectPtr call(NodePtr arg1) override {
     auto f = f_;
     return make_shared<Func2>(
-      [f,arg1](ObjectPtr arg2, ObjectPtr arg3) {
+      [f,arg1](NodePtr arg2, NodePtr arg3) {
         return f(arg1, arg2, arg3);
       }
-      , name_ + "(" + arg1->name() + ")"
     );
   }
 };
 
 ObjectPtr True () {
   return make_shared<Func2> (
-    [&](ObjectPtr arg1, ObjectPtr arg2) {
-      return arg1;
+    [&](NodePtr arg1, NodePtr arg2) {
+      return arg1->eval();
     }
-    , "true"
   );
 }
+
+NodePtr TrueNode() {
+  NodePtr node = make_shared<Node>();
+  node->kind_ = Kind::Fun;
+  node->name_ = "t";
+  return node;
+};
 
 ObjectPtr False () {
   return make_shared<Func2> (
-    [&](ObjectPtr arg1, ObjectPtr arg2) {
-      return arg2;
+    [&](NodePtr arg1, NodePtr arg2) {
+      return arg2->eval();
     }
   );
 }
 
-
-struct Node {
-  Node();
-  // NodePtr apply(NodePtr arg);
-  void dump(int indent = 0) const;
-
-  Kind kind_;
-  string name_;
-  NodePtr fun_;
-  NodePtr arg_;
+NodePtr FalseNode() {
+  NodePtr node = make_shared<Node>();
+  node->kind_ = Kind::Fun;
+  node->name_ = "f";
+  return node;
 };
 
 Node::Node(){}
@@ -191,137 +202,141 @@ NodePtr parse(const vector<string>& tokens, int& i) {
     * t
 */
 
-ObjectPtr eval(NodePtr node, map<string, NodePtr>& table) {
+map<string, NodePtr> gTable;
+
+ObjectPtr Node::eval() {
   auto make = [](auto val) { return make_shared<Object>(val); };
-  auto make_f1 = [](auto val, const string name = "") { return make_shared<Func1>(val, name); };
-  auto make_f2 = [](auto val, const string name = "") { return make_shared<Func2>(val, name); };
-  auto make_f3 = [](auto val, const string name = "") { return make_shared<Func3>(val, name); };
+  auto make_f1 = [](auto val) { return make_shared<Func1>(val); };
+  auto make_f2 = [](auto val) { return make_shared<Func2>(val); };
+  auto make_f3 = [](auto val) { return make_shared<Func3>(val); };
+  auto make_tmp = [](NodePtr a, NodePtr b) {
+    NodePtr node = make_shared<Node>();
+    node->kind_ = Kind::App;
+    node->fun_ = a;
+    node->arg_ = b;
+    return node;
+  };
+  cerr << "eval " << name_ << endl;
 
-  if (node->kind_ == Kind::Number) {
-    return make(stol(node->name_));
+  if (kind_ == Kind::Number) {
+    return make(stol(name_));
   }
-  else if (node->kind_ == Kind::App) {
-    auto fun = eval(node->fun_, table);
-    auto arg = eval(node->arg_, table);
+  else if (kind_ == Kind::App) {
+    auto fun = fun_->eval();
 
-    return fun->call(arg);
+    return fun->call(arg_);
   }
-  else if (node->kind_ == Kind::Fun) {
-    // #4
-    if (node->name_ == "eq") {
-      return make_f2([=](ObjectPtr arg1, ObjectPtr arg2){
-        return arg1->val() == arg2->val() ? True() : False();
-      });
-    }
+  else if (kind_ == Kind::Fun) {
     // #5
-    else if (node->name_ == "inc") {
-      return make_f1([&](ObjectPtr arg){
-        return make(arg->val() + 1);
-      }, "inc");
+    if (name_ == "inc") {
+      return make_f1([&](NodePtr arg){
+        return make(arg->eval()->val() + 1);
+      });
     }
     // #7
-    else if (node->name_ == "add") {
-      return make_f2([=](ObjectPtr arg1, ObjectPtr arg2){
-        return make(arg1->val() + arg2->val());
-      });
-    }
-    // #8
-    else if (node->name_ == "mul") {
-      return make_f2([=](ObjectPtr arg1, ObjectPtr arg2){
-        return make(arg1->val() * arg2->val());
+    else if (name_ == "add") {
+      return make_f2([=](NodePtr arg1, NodePtr arg2){
+        return make(arg1->eval()->val() + arg2->eval()->val());
       });
     }
     // #9
-    else if (node->name_ == "div") {
-      return make_f2([=](ObjectPtr arg1, ObjectPtr arg2){
-        return make(arg1->val() / arg2->val());
+    else if (name_ == "mul") {
+      return make_f2([=](NodePtr arg1, NodePtr arg2){
+        return make(arg1->eval()->val() * arg2->eval()->val());
       });
     }
     // #10
-    else if (node->name_ == "lt") {
-      return make_f2([=](ObjectPtr arg1, ObjectPtr arg2){
-        return arg1->val() < arg2->val() ? True() : False();
+    else if (name_ == "div") {
+      return make_f2([=](NodePtr arg1, NodePtr arg2){
+        return make(arg1->eval()->val() / arg2->eval()->val());
+      });
+    }
+    // #11
+    else if (name_ == "eq") {
+      return make_f2([=](NodePtr arg1, NodePtr arg2){
+        return arg1->eval()->val() == arg2->eval()->val() ? True() : False();
+      });
+    }
+    // #12
+    else if (name_ == "lt") {
+      return make_f2([=](NodePtr arg1, NodePtr arg2){
+        return arg1->eval()->val() < arg2->eval()->val() ? True() : False();
       });
     }
     // #16
-    else if (node->name_ == "neg") {
-      return make_f1([=](ObjectPtr arg){
-        return make(-arg->val());
+    else if (name_ == "neg") {
+      return make_f1([=](NodePtr arg){
+        return make(- arg->eval()->val());
       });
     }
     // #18
-    else if (node->name_ == "s") {
-      return make_f3([=](ObjectPtr arg1, ObjectPtr arg2, ObjectPtr arg3){
-        auto tmp = arg2->call(arg3);
-        return arg1->call(arg3)->call(tmp);
+    else if (name_ == "s") {
+      return make_f3([=](NodePtr arg1, NodePtr arg2, NodePtr arg3){
+        auto tmp = make_tmp(arg2, arg3);
+        return arg1->eval()->call(arg3)->call(tmp);
       });
     }
     // #19
-    else if (node->name_ == "c") {
-      return make_f3([=](ObjectPtr arg1, ObjectPtr arg2, ObjectPtr arg3){
-        auto tmp = arg1->call(arg3);
-        return tmp->call(arg2);
+    else if (name_ == "c") {
+      return make_f3([=](NodePtr arg1, NodePtr arg2, NodePtr arg3){
+        auto tmp = make_tmp(arg1, arg3);
+        return tmp->eval()->call(arg2);
       });
     }
     // #20
-    else if (node->name_ == "b") {
-      return make_f3([=](ObjectPtr arg1, ObjectPtr arg2, ObjectPtr arg3){
-        auto tmp = arg2->call(arg3);
-        return arg1->call(tmp);
-      }, "b");
+    else if (name_ == "b") {
+      return make_f3([=](NodePtr arg1, NodePtr arg2, NodePtr arg3){
+        auto tmp = make_tmp(arg2, arg3);
+        return arg1->eval()->call(tmp);
+      });
     }
     // #21
-    else if (node->name_ == "t") {
+    else if (name_ == "t") {
       return True();
     }
-    else if (node->name_ == "f") {
+    else if (name_ == "f") {
       return False();
     }
     // #24
-    else if (node->name_ == "i") {
-      return make_f1([=](ObjectPtr arg1){
-        return arg1;
+    else if (name_ == "i") {
+      return make_f1([=](NodePtr arg1){
+        return arg1->eval();
       });
     }
     // #25
-    else if (node->name_ == "cons") {
-      return make_f3([=](ObjectPtr arg1, ObjectPtr arg2, ObjectPtr arg3){
-        return arg3->call(arg1)->call(arg2);
-      }
-      , "cons");
+    else if (name_ == "cons") {
+      return make_f3([=](NodePtr arg1, NodePtr arg2, NodePtr arg3){
+        return arg3->eval()->call(arg1)->call(arg2);
+      });
     }
     // #26
-    else if (node->name_ == "car") {
-      return make_f1([=](ObjectPtr arg1){
-        cerr << "calling lambda f1 in car "
-          << arg1->name() << endl;
-        return arg1->call(True());
-      }
-      , "car");
+    else if (name_ == "car") {
+      return make_f1([=](NodePtr arg1){
+        return arg1->eval()->call(TrueNode());
+      });
     }
     // #27
-    else if (node->name_ == "cdr") {
-      return make_f1([=](ObjectPtr arg1){
-        return arg1->call(False());
-      }
-      , "cdr");
+    else if (name_ == "cdr") {
+      return make_f1([=](NodePtr arg1){
+        return arg1->eval()->call(FalseNode());
+      });
     }
     // #28
-    else if (node->name_ == "nil") {
+    else if (name_ == "nil") {
       return make_shared<Nil>();
     }
     // #29
-    else if (node->name_ == "isnil") {
-      return make_f1([=](ObjectPtr arg1){
-        return arg1->is_nil() ? True() : False();
+    else if (name_ == "isnil") {
+      return make_f1([=](NodePtr arg1){
+        return arg1->eval()->is_nil() ? True() : False();
       });
     }
-    else if (table.count(node->name_)) {
-      auto child = table[node->name_];
-      return eval(child, table);
+    else if (gTable.count(name_)) {
+      auto child = gTable[name_];
+      return child->eval();
     }
     else {
-      cerr << "unknown function: " << node->name_ << endl;
+      cerr << "unknown function: " << name_ << endl;
     }
   }
 
@@ -386,8 +401,6 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  map<string, NodePtr> table;
-  map<string, ObjectPtr> objects;
   {
     ifstream ifs(argv[1]);
     if (ifs.fail()) {
@@ -406,32 +419,20 @@ int main(int argc, char* argv[]) {
         cerr << "not assignment" << endl;
         continue;
       }
+      string decl;
+      getline(ss, decl);
 
       vector<string> tokens;
-      tokenize(ss.str(), tokens);
+      tokenize(decl, tokens);
 
       int i = 0;
       auto node = parse(tokens, i);
-      table[var] = node;
+      gTable[var] = node;
     }
-
-#if 1
-    map<string, set<string>> G;
-    create_depends(G, table);
-    vector<string> order;
-    if (!topo_sort(G, order)) cerr << "recursive" << endl;
-
-    for(auto& var : order) {
-      objects[var] = eval(table[var], table);
-    }
-#elif 0
-    for(auto& var : table) {
-      objects[var.first] = eval(var.second, table);
-    }
-#else
-   objects["galaxy"] = eval(table["galaxy"], table);
-#endif
   }
+
+  map<string, ObjectPtr> objects;
+  objects["galaxy"] = gTable["galaxy"]->eval();
 
   return 0;
 }
