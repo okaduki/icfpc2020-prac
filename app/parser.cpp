@@ -51,67 +51,15 @@ public:
     throw runtime_error("object is not callable");
   }
 
-  void dump() const {
+  virtual void dump() const {
     if (is_val_) cerr << "val: " << val_ << endl;
     else if (is_nil_) cerr << "nil" << endl;
     else if (is_mod_) cerr << "[" << mod_ << "]" << endl;
     else cerr << "func " << name_ << endl;
   }
 
-  ObjectPtr mod_num() {
-    ObjectPtr res = make_shared<Object>();
-    res->is_mod_ = true;
-
-    string mod = "";
-    long val = val_;
-
-    if (val >= 0) {
-      mod += "01";
-    }
-    else {
-      mod += "10";
-      val = -val;
-    }
-
-    long bit = 0, ub = 1;
-    while(val >= ub) {
-      ub <<= 4;
-      ++bit;
-    }
-
-    mod += string(bit, '1') + "0";
-    ub >>= 1;
-    while(ub) {
-      mod += (val & ub) ? "1" : "0";
-      ub >>= 1;
-    }
-
-    res->mod_ = mod;
-    return res;
-  }
-
-  ObjectPtr dem() {
-    string mod = mod_;
-    
-    long val = 0, sign = 0;
-    if (mod.substr(0,2) == "01") sign = 1;
-    else if (mod.substr(0,2) == "10") sign = -1;
-
-    long bit = 0;
-    for(int i=2; ; ++i){
-      if (mod[i] == '0') break;
-      bit += 1;
-    }
-
-    long p = (1l << (bit * 4 - 1));
-    for(size_t i=2+bit+1; i < mod.size(); ++i) {
-      val += p * (mod[i] == '1' ? 1 : 0);
-      p >>= 1;
-    }
-
-    val = sign * val;
-    return make_shared<Object>(val);
-  }
+  ObjectPtr mod();
+  ObjectPtr dem();
 };
 
 struct Node {
@@ -197,6 +145,194 @@ NodePtr FalseNode() {
   return node;
 };
 
+
+ObjectPtr Object::mod() {
+  if (is_val_) {
+    ObjectPtr res = make_shared<Object>();
+    res->is_mod_ = true;
+
+    string mod = "";
+    long val = val_;
+
+    if (val >= 0) {
+      mod += "01";
+    }
+    else {
+      mod += "10";
+      val = -val;
+    }
+
+    long bit = 0, ub = 1;
+    while(val >= ub) {
+      ub <<= 4;
+      ++bit;
+    }
+
+    mod += string(bit, '1') + "0";
+    ub >>= 1;
+    while(ub) {
+      mod += (val & ub) ? "1" : "0";
+      ub >>= 1;
+    }
+
+    res->mod_ = mod;
+    return res;
+  }
+  else {
+    string mod;
+    if (is_nil()) {
+      mod += "00";
+    }
+    else {
+      auto hd = this->call(TrueNode());
+      auto tl = this->call(FalseNode());
+
+      mod += "11";
+      mod += hd->mod()->mod_;
+      mod += tl->mod()->mod_;
+    }
+
+    ObjectPtr res = make_shared<Object>();
+    res->mod_ = mod;
+    res->is_mod_ = true;
+    return res;
+  }
+}
+
+NodePtr dem_str(const string& mod, int& ix) {
+  string sig = mod.substr(ix, 2);
+
+  if (sig == "01" || sig == "10") { // number
+    long val = 0, sign = 0;
+    if (sig == "01") sign = 1;
+    else if (sig == "10") sign = -1;
+
+    long bit = 0;
+    ix += 2;
+    for(;;++ix){
+      if (mod[ix] == '0') break;
+      bit += 1;
+    }
+    ++ix;
+
+    long p = (1l << (bit * 4 - 1));
+    long len = bit * 4;
+    for(int i=0; i < len; ++i) {
+      val += p * (mod[ix++] == '1' ? 1 : 0);
+      p >>= 1;
+    }
+
+    val = sign * val;
+    auto res = make_shared<Node>();
+    res->kind_ = Kind::Number;
+    res->name_ = to_string(val);
+    return res;
+  }
+  else { // list
+    ix += 2;
+    if (sig == "00") {
+      auto res = make_shared<Node>();
+      res->kind_ = Kind::Fun;
+      res->name_ = "nil";
+      return res;
+    }
+
+    auto hd = dem_str(mod, ix);
+    auto tl = dem_str(mod, ix);
+
+    auto cons = make_shared<Node>();
+    cons->kind_ = Kind::Fun;
+    cons->name_ = "cons";
+
+    auto res_fun = make_shared<Node>();
+    res_fun->kind_ = Kind::App;
+    res_fun->fun_ = cons;
+    res_fun->arg_ = hd;
+
+    auto res = make_shared<Node>();
+    res->kind_ = Kind::App;
+    res->fun_ = res_fun;
+    res->arg_ = tl;
+
+    return res;
+  }
+}
+
+ObjectPtr Object::dem() {
+  int i = 0;
+  auto node = dem_str(mod_, i);
+  node->dump();
+  return node->eval();
+}
+
+struct Draw : public Object {
+  vector<pair<long,long>> points;
+  Draw() : Object() {}
+
+  void dump() const override {
+    cerr << "(";
+    for(const auto& p : points) {
+      cerr << "(" << p.first << " " << p.second << ")";
+    }
+    cerr << ")" << endl;
+  }
+};
+
+struct DrawList : public Object {
+  vector<vector<pair<long,long>>> pointss;
+  DrawList() : Object() {}
+
+  void dump() const override {
+    cerr << "(";
+    for(const auto& points : pointss) {
+      cerr << "(";
+      for(const auto & p : points)
+        cerr << "(" << p.first << " " << p.second << ")";
+      cerr << ") ";
+    }
+    cerr << ")" << endl;
+  }
+};
+
+shared_ptr<Draw> draw(ObjectPtr obj) {
+  auto res = make_shared<Draw>();
+  while(true){
+    if (obj->is_nil()) break;
+
+    auto point = obj->call(TrueNode());
+    auto x = point->call(TrueNode())->val();
+    auto y = point->call(FalseNode())->call(TrueNode())->val();
+
+    res->points.emplace_back(x, y);
+    obj = obj->call(FalseNode());
+  }
+
+  return res;
+}
+
+shared_ptr<Draw> draw(NodePtr n) {
+  return draw(n->eval());
+}
+
+shared_ptr<DrawList> drawlist(ObjectPtr obj) {
+  auto res = make_shared<DrawList>();
+  while(true){
+    if (obj->is_nil()) break;
+
+    auto points = obj->call(TrueNode());
+    auto tmp = draw(points);
+
+    res->pointss.emplace_back(tmp->points);
+    obj = obj->call(FalseNode());
+  }
+
+  return res;
+}
+
+shared_ptr<DrawList> drawlist(NodePtr n) {
+  return drawlist(n->eval());
+}
+
 Node::Node(){}
 
 void Node::dump(int indent) const {
@@ -273,8 +409,8 @@ NodePtr parse(const vector<string>& tokens) {
     * if0
     * mod
     * dem
-    draw
-    multipledraw
+    * draw
+    * multipledraw
     send
     interact 
 */
@@ -341,7 +477,7 @@ ObjectPtr Node::eval() {
     }
     else if (name_ == "mod") {
       return make_f1([=](NodePtr arg1){
-        return arg1->eval()->mod_num();
+        return arg1->eval()->mod();
       });
     }
     else if (name_ == "dem") {
@@ -415,6 +551,18 @@ ObjectPtr Node::eval() {
     else if (name_ == "isnil") {
       return make_f1([=](NodePtr arg1){
         return arg1->eval()->is_nil() ? True() : False();
+      });
+    }
+    // #32
+    else if (name_ == "draw") {
+      return make_f1([=](NodePtr arg1){
+        return draw(arg1);
+      });
+    }
+    // #34
+    else if (name_ == "multipledraw") {
+      return make_f1([=](NodePtr arg1){
+        return drawlist(arg1);
       });
     }
     // #37
