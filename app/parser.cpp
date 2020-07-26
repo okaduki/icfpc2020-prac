@@ -1,4 +1,5 @@
 #include <bits/stdc++.h>
+#include <curl/curl.h>
 
 using namespace std;
 
@@ -36,7 +37,7 @@ public:
     }
     return val_;
   }
-  string mod() const {
+  string mod_val() const {
     if (!is_mod_) {
       throw runtime_error("not mod");
     }
@@ -50,6 +51,8 @@ public:
   virtual ObjectPtr call(NodePtr arg) {
     throw runtime_error("object is not callable");
   }
+
+  ObjectPtr send();
 
   virtual void dump() const {
     if (is_val_) cerr << "val: " << val_ << endl;
@@ -261,7 +264,6 @@ NodePtr dem_str(const string& mod, int& ix) {
 ObjectPtr Object::dem() {
   int i = 0;
   auto node = dem_str(mod_, i);
-  node->dump();
   return node->eval();
 }
 
@@ -331,6 +333,43 @@ shared_ptr<DrawList> drawlist(ObjectPtr obj) {
 
 shared_ptr<DrawList> drawlist(NodePtr n) {
   return drawlist(n->eval());
+}
+
+size_t send_callback(char *ptr, size_t size, size_t nmemb, string *stream) {
+  int dataLength = size * nmemb;
+  stream->append(ptr, dataLength);
+  return dataLength;
+}
+
+string send(const string& str) {
+  CURL *curl = curl_easy_init();
+
+  string resp;
+  curl_easy_setopt(curl, CURLOPT_URL, "https://icfpc2020-api.testkontur.ru/aliens/send?apiKey=b0a3d915b8d742a39897ab4dab931721");
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, send_callback);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
+
+  curl_easy_setopt(curl, CURLOPT_POST, 1);
+  curl_easy_setopt(curl, CURLOPT_POSTFIELDS, str.c_str());
+  curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, str.size());
+
+  CURLcode ret = curl_easy_perform(curl);
+  curl_easy_cleanup(curl);
+
+  if (ret != CURLE_OK) {
+    cerr << "curl failed" << endl;
+  }
+  
+  return resp;
+};
+
+ObjectPtr Object::send() {
+  auto obj_mod = this->mod();
+  string str = obj_mod->mod_val();
+  string resp = ::send(str);
+
+  obj_mod->mod_ = resp;
+  return obj_mod->dem();
 }
 
 Node::Node(){}
@@ -411,7 +450,7 @@ NodePtr parse(const vector<string>& tokens) {
     * dem
     * draw
     * multipledraw
-    send
+    * send
     interact 
 */
 
@@ -565,6 +604,12 @@ ObjectPtr Node::eval() {
         return drawlist(arg1);
       });
     }
+    // #36
+    else if (name_ == "send") {
+      return make_f1([=](NodePtr arg1){
+        return arg1->eval()->send();
+      });
+    }
     // #37
     else if (name_ == "if0") {
       return make_f3([=](NodePtr arg1, NodePtr arg2, NodePtr arg3){
@@ -638,6 +683,8 @@ bool topo_sort(map<string, set<string>>& G, vector<string>& order) {
 }
 
 int main(int argc, char* argv[]) {
+	curl_global_init(CURL_GLOBAL_ALL);
+
   if (argc < 2) {
     cerr << "usage: " << argv[0] << " galaxy.txt" << endl;
     return 1;
