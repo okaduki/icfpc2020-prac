@@ -31,7 +31,7 @@ protected:
 
 public:
   Object() : val_(0), is_val_(false), is_nil_(false), is_mod_(false) {}
-  Object(long val) : val_(val), is_val_ (true), is_mod_(false) {}
+  Object(long val) : val_(val), is_val_ (true), is_nil_(false), is_mod_(false) {}
 
   static ObjectPtr make() { return make_shared<Object>(); }
   static ObjectPtr make(long val) { return make_shared<Object>(val); }
@@ -52,19 +52,15 @@ public:
 
   bool is_val() const { return is_val_; }
   bool is_nil() const { return is_nil_; }
+  bool is_mod() const { return is_mod_; }
 
-  virtual NodePtr call(NodePtr arg) {
+  virtual NodePtr call(NodePtr arg) const {
     throw runtime_error("object is not callable");
   }
 
   NodePtr send();
 
-  virtual void dump() const {
-    if (is_val_) cerr << "val: " << val_ << endl;
-    else if (is_nil_) cerr << "nil" << endl;
-    else if (is_mod_) cerr << "[" << mod_ << "]" << endl;
-    else cerr << "func " << name_ << endl;
-  }
+  virtual void dump() const;
 
   NodePtr mod();
   NodePtr dem();
@@ -86,70 +82,65 @@ struct Node {
   ObjectPtr val_;
 };
 
-struct Nil : public Object {
-  Nil() : Object() { is_nil_ = true; }
-};
-struct NilNode : public Node {
-  NilNode() : Node(Kind::Fun, make_shared<Nil>()) { }
-};
-
 struct Func1 : public Object {
   using Type = function<NodePtr(NodePtr)>;
-  static shared_ptr<Func1> make(Type f) { return make_shared<Func1>(f); }
+  static shared_ptr<Func1> make(Type f, string name) { return make_shared<Func1>(f, name); }
   Type f_;
-  Func1 (Type f) : Object(), f_(f) {}
-  virtual NodePtr call(NodePtr obj) override {
+  Func1 (Type f, string name) : Object(), f_(f) { name_ = name; }
+  virtual NodePtr call(NodePtr obj) const override {
     return f_(obj);
   }
 };
 struct Func1Node : public Node {
   Func1Node(shared_ptr<Func1> val) : Node(Kind::Fun, val) { }
-  static shared_ptr<Func1Node> make(Func1::Type f) { return make_shared<Func1Node>( make_shared<Func1>(f)); }
+  static shared_ptr<Func1Node> make(Func1::Type f, string name) { return make_shared<Func1Node>( make_shared<Func1>(f, name)); }
 };
 
 struct Func2 : public Object {
   using Type = function<NodePtr(NodePtr,NodePtr)>;
-  static shared_ptr<Func2> make(Type f) { return make_shared<Func2>(f); }
+  static shared_ptr<Func2> make(Type f, string name) { return make_shared<Func2>(f, name); }
   Type f_;
-  Func2 (Type f) : Object(), f_(f) { }
-  virtual NodePtr call(NodePtr arg1) override {
+  Func2 (Type f, string name) : Object(), f_(f) { name_ = name; }
+  virtual NodePtr call(NodePtr arg1) const override {
     auto f = f_;
     return Func1Node::make(
       [f,arg1](NodePtr arg2) {
         return f(arg1, arg2);
-      }
+      },
+      name_ + "(" + arg1->name_ + ")"
     );
   }
 };
 struct Func2Node : public Node {
   Func2Node(shared_ptr<Func2> val) : Node(Kind::Fun, val) {}
-  static shared_ptr<Func2Node> make(Func2::Type f) { return make_shared<Func2Node>(make_shared<Func2>(f)); }
+  static shared_ptr<Func2Node> make(Func2::Type f, string name) { return make_shared<Func2Node>(make_shared<Func2>(f, name)); }
 };
 
 struct Func3 : public Object {
   using Type = function<NodePtr(NodePtr,NodePtr,NodePtr)>;
-  static shared_ptr<Func3> make(Type f) { return make_shared<Func3>(f); }
+  static shared_ptr<Func3> make(Type f, string name) { return make_shared<Func3>(f, name); }
   Type f_;
-  Func3 (Type f) : Object(), f_(f) { }
-  virtual NodePtr call(NodePtr arg1) override {
+  Func3 (Type f, string name) : Object(), f_(f) { name_ = name; }
+  virtual NodePtr call(NodePtr arg1) const override {
     auto f = f_;
     return Func2Node::make(
       [f,arg1](NodePtr arg2, NodePtr arg3) {
         return f(arg1, arg2, arg3);
       }
+      , name_ + "(" + arg1->name_ + ")"
     );
   }
 };
 struct Func3Node : public Node {
   Func3Node(shared_ptr<Func3> val) : Node(Kind::Fun, val) {}
-  static shared_ptr<Func3Node> make(Func3::Type f) { return make_shared<Func3Node>(make_shared<Func3>(f)); }
+  static shared_ptr<Func3Node> make(Func3::Type f, string name) { return make_shared<Func3Node>(make_shared<Func3>(f, name)); }
 };
 
 ObjectPtr True () {
   return make_shared<Func2> (
     [&](NodePtr arg1, NodePtr arg2) {
       return arg1;
-    }
+    }, "t"
   );
 }
 NodePtr TrueNode() {
@@ -162,13 +153,23 @@ ObjectPtr False () {
   return make_shared<Func2> (
     [&](NodePtr arg1, NodePtr arg2) {
       return arg2;
-    }
+    }, "f"
   );
 }
 NodePtr FalseNode() {
   NodePtr node = Node::make(Kind::Fun, False());
   node->name_ = "f";
   return node;
+};
+
+struct Nil : public Object {
+  Nil() : Object() { is_nil_ = true; }
+  virtual NodePtr call(NodePtr obj) const override {
+    return TrueNode();
+  }
+};
+struct NilNode : public Node {
+  NilNode() : Node(Kind::Fun, make_shared<Nil>()) { }
 };
 
 NodePtr Object::mod() {
@@ -262,7 +263,7 @@ NodePtr dem_str(const string& mod, int& ix) {
 
     return Func1Node::make([=](NodePtr arg1){
       return arg1->eval()->call(hd)->eval()->call(tl);
-    });
+    }, "dem_inner");
   }
 }
 
@@ -273,7 +274,7 @@ NodePtr Object::dem() {
 
 struct Draw : public Object {
   vector<pair<long,long>> points;
-  Draw() : Object() {}
+  Draw() : Object() { name_ = "draw()"; }
 
   void dump() const override {
     cerr << "(";
@@ -284,9 +285,41 @@ struct Draw : public Object {
   }
 };
 
+void Object::dump() const {
+  if (this->is_nil()){
+    cerr << "nil";
+    return;
+  }
+  if (this->is_val()) {
+    cerr << this->val() << " ";
+    return;
+  }
+  else if (this->is_mod()) {
+    cerr << "[" << this->mod_val() << "]";
+    return;
+  }
+
+  // if (this->name_.substr(0, 4) == "cons") {
+  if (1) {
+    cerr << "(";
+
+    auto hd = this->call(TrueNode())->eval();
+    hd->dump();
+    cerr << ", ";
+
+    auto tl = this->call(FalseNode())->eval();
+    tl->dump();
+
+    cerr << ")";
+  }
+  else {
+    cerr << this->name();
+  }
+}
+
 struct DrawList : public Object {
   vector<vector<pair<long,long>>> pointss;
-  DrawList() : Object() {}
+  DrawList() : Object() { name_ = "multipledraw()"; }
 
   void dump() const override {
     cerr << "(";
@@ -309,7 +342,7 @@ NodePtr draw(NodePtr node) {
 
     auto point = obj->call(TrueNode())->eval();
     auto x = point->call(TrueNode())->eval()->val();
-    auto y = point->call(FalseNode())->eval()->call(TrueNode())->eval()->val();
+    auto y = point->call(FalseNode())->eval()->val();
 
     res->points.emplace_back(x, y);
     obj = obj->call(FalseNode())->eval();
@@ -344,7 +377,7 @@ string send(const string& str) {
   CURL *curl = curl_easy_init();
 
   string resp;
-  curl_easy_setopt(curl, CURLOPT_URL, "https://icfpc2020-api.testkontur.ru/aliens/send?apiKey=b0a3d915b8d742a39897ab4dab931721");
+  curl_easy_setopt(curl, CURLOPT_URL, "http://127.0.0.1:12345/aliens/send");
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, send_callback);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
 
@@ -358,7 +391,6 @@ string send(const string& str) {
   if (ret != CURLE_OK) {
     cerr << "curl failed" << endl;
   }
-  
   return resp;
 };
 
@@ -436,6 +468,20 @@ NodePtr parse(const vector<string>& tokens) {
   return parse_(tokens, i);
 }
 
+NodePtr tolist(const vector<NodePtr>& nodes, size_t i = 0) {
+  if (nodes.size() == i) return make_shared<NilNode>();
+
+  auto ap1 = Node::make(Kind::App);
+  auto ap2 = Node::make(Kind::App);
+  ap1->fun_ = ap2;
+
+  ap2->fun_ = Node::make(Kind::Fun);
+  ap2->fun_->name_ = "cons";
+  ap2->arg_ = nodes[i];
+
+  ap1->arg_ = tolist(nodes, i+1);
+  return ap1;
+}
 
 /*
   implement list (in galaxy.txt)
@@ -475,6 +521,7 @@ ObjectPtr Node::eval() {
     node->kind_ = Kind::App;
     node->fun_ = a;
     node->arg_ = b;
+    // node->name_ = a->name_ + "{" + b->name_ + "}";
     return node;
   };
 
@@ -490,28 +537,28 @@ ObjectPtr Node::eval() {
     if (name_ == "inc") {
       val_ = Func1::make([&](NodePtr arg){
         return Node::make(Kind::Number, Object::make(arg->eval()->val() + 1));
-      });
+      }, "inc");
     }
     // #7
     else if (name_ == "add") {
       val_ = Func2::make([=](NodePtr arg1, NodePtr arg2){
         return Node::make(Kind::Number,
           Object::make(arg1->eval()->val() + arg2->eval()->val()));
-      });
+      }, "add");
     }
     // #9
     else if (name_ == "mul") {
       val_ = Func2::make([=](NodePtr arg1, NodePtr arg2){
         return Node::make(Kind::Number,
           Object::make(arg1->eval()->val() * arg2->eval()->val()));
-      });
+      }, "mul");
     }
     // #10
     else if (name_ == "div") {
       val_ = Func2::make([=](NodePtr arg1, NodePtr arg2){
         return Node::make(Kind::Number,
           Object::make(arg1->eval()->val() / arg2->eval()->val()));
-      });
+      }, "div");
     }
     // #11
     else if (name_ == "eq") {
@@ -519,49 +566,49 @@ ObjectPtr Node::eval() {
         return
           arg1->eval()->val() == arg2->eval()->val()
           ? TrueNode() : FalseNode();
-      });
+      }, "eq");
     }
     // #12
     else if (name_ == "lt") {
       val_ = Func2::make([=](NodePtr arg1, NodePtr arg2){
         return arg1->eval()->val() < arg2->eval()->val() ? TrueNode() : FalseNode();
-      });
+      }, "lt");
     }
     else if (name_ == "mod") {
       val_ = Func1::make([=](NodePtr arg1){
         return arg1->eval()->mod();
-      });
+      }, "mod");
     }
     else if (name_ == "dem") {
       val_ = Func1::make([=](NodePtr arg1){
         return arg1->eval()->dem();
-      });
+      }, "dem");
     }
     // #16
     else if (name_ == "neg") {
       val_ = Func1::make([=](NodePtr arg){
         return Node::make(Kind::Number, Object::make(- arg->eval()->val()));
-      });
+      }, "neg");
     }
     // #18
     else if (name_ == "s") {
       val_ = Func3::make([=](NodePtr arg1, NodePtr arg2, NodePtr arg3){
         auto tmp = make_app(arg2, arg3);
         return arg1->eval()->call(arg3)->eval()->call(tmp);
-      });
+      }, "s");
     }
     // #19
     else if (name_ == "c") {
       val_ = Func3::make([=](NodePtr arg1, NodePtr arg2, NodePtr arg3){
         return arg1->eval()->call(arg3)->eval()->call(arg2);
-      });
+      }, "c");
     }
     // #20
     else if (name_ == "b") {
       val_ = Func3::make([=](NodePtr arg1, NodePtr arg2, NodePtr arg3){
         auto tmp = make_app(arg2, arg3);
         return arg1->eval()->call(tmp);
-      });
+      }, "b");
     }
     // #21
     else if (name_ == "t") {
@@ -574,25 +621,33 @@ ObjectPtr Node::eval() {
     else if (name_ == "i") {
       val_ = Func1::make([=](NodePtr arg1){
         return arg1;
-      });
+      }, "i");
     }
     // #25
     else if (name_ == "cons") {
       val_ = Func3::make([=](NodePtr arg1, NodePtr arg2, NodePtr arg3){
-        return arg3->eval()->call(arg1)->eval()->call(arg2);
-      });
+        auto tmp = make_app(arg3, arg1);
+        auto tmp2 = make_app(tmp, arg2);
+        return tmp2;
+
+        // return arg3->eval()->call(arg1)->eval()->call(arg2);
+      }, "cons");
     }
     // #26
     else if (name_ == "car") {
       val_ = Func1::make([=](NodePtr arg1){
-        return arg1->eval()->call(TrueNode());
-      });
+        auto tmp = make_app(arg1, TrueNode());
+        return tmp;
+        // return arg1->eval()->call(TrueNode());
+      }, "car");
     }
     // #27
     else if (name_ == "cdr") {
       val_ = Func1::make([=](NodePtr arg1){
-        return arg1->eval()->call(FalseNode());
-      });
+        auto tmp = make_app(arg1, FalseNode());
+        return tmp;
+        // return arg1->eval()->call(FalseNode());
+      }, "cdr");
     }
     // #28
     else if (name_ == "nil") {
@@ -602,31 +657,58 @@ ObjectPtr Node::eval() {
     else if (name_ == "isnil") {
       val_ = Func1::make([=](NodePtr arg1){
         return arg1->eval()->is_nil() ? TrueNode() : FalseNode();
-      });
+      }, "isnil");
     }
     // #32
     else if (name_ == "draw") {
       val_ = Func1::make([=](NodePtr arg1){
         return draw(arg1);
-      });
+      }, "draw");
     }
     // #34
     else if (name_ == "multipledraw") {
       val_ = Func1::make([=](NodePtr arg1){
         return drawlist(arg1);
-      });
+      }, "multipledraw");
     }
     // #36
     else if (name_ == "send") {
       val_ = Func1::make([=](NodePtr arg1){
         return arg1->eval()->send();
-      });
+      }, "send");
     }
     // #37
     else if (name_ == "if0") {
       val_ = Func3::make([=](NodePtr arg1, NodePtr arg2, NodePtr arg3){
         return arg1->eval()->val() == 0 ? arg2 : arg3;
-      });
+      }, "if0");
+    }
+    else if (name_ == "interact") {
+      val_ = Func3::make([=](NodePtr arg1, NodePtr arg2, NodePtr arg3){
+        while(true) {
+          auto next = arg1->eval()->call(arg2)->eval()->call(arg3)->eval();
+          auto flag = next->call(TrueNode());
+          next = next->call(FalseNode())->eval();
+          auto newState = next->call(TrueNode());
+          // auto newState = next->call(TrueNode())->eval()->mod()->eval()->dem();
+          next = next->call(FalseNode())->eval();
+          auto data = next->call(TrueNode());
+
+          if (flag->eval()->val() == 0) {
+            auto fst = newState;
+
+            auto draw = Node::make(Kind::Fun);
+            draw->name_ = "multipledraw";
+            // auto snd = make_app(draw, data)->eval();
+            auto snd = draw->eval()->call(data);
+
+            return tolist({fst, snd});
+          }
+
+          arg2 = newState;
+          arg3 = data->eval()->send();
+        }
+      }, "interact");
     }
     else if (gTable.count(name_)) {
       auto child = gTable[name_];
@@ -742,6 +824,7 @@ int main(int argc, char* argv[]) {
     if (line.find("=") == string::npos) {
       auto node = parse(tokenize(line));
       node->eval()->dump();
+      cerr<<endl;
     }
     else {
       stringstream ss(line);
@@ -755,6 +838,7 @@ int main(int argc, char* argv[]) {
       auto node = parse(tokenize(decl));
       gTable[var] = node;
       gTable[var]->eval()->dump();
+      cerr<<endl;
     }
   }
 
