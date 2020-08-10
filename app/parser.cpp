@@ -322,6 +322,7 @@ struct DrawList : public Object {
   DrawList() : Object() { name_ = "multipledraw()"; }
 
   void dump() const override {
+    /*
     cerr << "(";
     for(const auto& points : pointss) {
       cerr << "(";
@@ -330,6 +331,43 @@ struct DrawList : public Object {
       cerr << ") ";
     }
     cerr << ")" << endl;
+    */
+
+    ofstream ofs("windows.pgm");
+    long mn_x = 1e9, mn_y = 1e9;
+    long mx_x = -1e9, mx_y = -1e9;
+    for(const auto& ps : pointss) {
+      for(const auto& p : ps) {
+        mn_x = min(mn_x, p.first);
+        mx_x = max(mx_x, p.first);
+        mn_y = min(mn_y, p.second);
+        mx_y = max(mx_y, p.second);
+      }
+    }
+
+    int w = mx_x - mn_x + 1;
+    int h = mx_y - mn_y + 1;
+    ofs << "P2" << endl
+        << w << " " << h << endl
+        << 255 << endl;
+    
+    vector<vector<long>> dat(h, vector<long>(w, 0));
+
+    long delta = 255 / pointss.size();
+    long col = 0;
+    for(const auto& ps : pointss) {
+      col += delta;
+      for(const auto& p : ps) {
+        if (dat[p.second - mn_y][p.first - mn_x] == 0)
+          dat[p.second - mn_y][p.first - mn_x] = col;
+      }
+    }
+    cerr << mn_x <<","<<mn_y<<endl;
+
+    for(auto& rows : dat) {
+      for(auto& val : rows) ofs << val << " ";
+      ofs << endl;
+    }
   }
 };
 
@@ -816,6 +854,7 @@ int main(int argc, char* argv[]) {
   map<string, ObjectPtr> objects;
   objects["galaxy"] = gTable["galaxy"]->eval();
 
+#if 0
   while(1) {
     cout << "> " << flush;
     string line;
@@ -841,6 +880,36 @@ int main(int argc, char* argv[]) {
       cerr<<endl;
     }
   }
+#else
+  auto state = make_shared<NilNode>();
+  gTable["_state"] = state;
+
+  while(1) {
+    cout << "> " << flush;
+
+    long x, y;
+    cin >> x >> y;
+
+    string cmd = "ap ap ap interact galaxy _state ap ap cons "
+      + to_string(x) + " " + to_string(y);
+
+    gTable["_internal"] = parse(tokenize(cmd));
+
+    string get_state_cmd = "ap car _internal";
+    string get_drawlist_cmd = "ap car ap cdr _internal";
+
+    auto windows = parse(tokenize(get_drawlist_cmd))->eval();
+    windows->dump();
+    cerr << endl;
+
+    auto next = parse(tokenize(get_state_cmd));
+    cerr << "_state: ";
+    next->eval()->dump();
+    cerr << endl;
+
+    gTable["_state"] = next;
+  }
+#endif
 
   return 0;
 }
